@@ -95,3 +95,13 @@ By directly inspecting headers from 2016, 2017, 2020, 2021 (Jan), and 2021 (Feb)
 - This is **straight-line distance between station locations**, labeled `distance_km_straight_line` — not actual ridden distance. Real bike routes following streets/lanes are typically 20–40% longer than straight-line.
 - **Round trips** (start station == end station, common for leisure/loop rides) get `distance_km_straight_line = 0` even though the bike clearly traveled. This will under-represent total mileage for loop trips. Pair distance with `duration_seconds` in any "trip length" visualization so loop trips aren't misread as "no trip."
 - A small number of historical rows have `0,0` or missing station coordinates (depot/maintenance records); these should be filtered or flagged rather than treated as valid zero-distance trips.
+
+### 5. What is a "day"? (for the weather join)
+
+Citibike timestamps (`starttime`/`started_at`, `stoptime`/`ended_at`) are recorded as naive local-time values (no UTC offset or timezone field) in **America/New_York** local time — the timezone the system actually operates in, and the same timezone `nyu-datasets.weather.m_weather_daily_nyc` uses for its `date` column.
+
+**Decision:** a trip's "day" is the **calendar date of `started_at`, in America/New_York local time** (taken at face value, with no further timezone conversion since the source is already local). This is the join key against `m_weather_daily_nyc.date`.
+
+**Why start time, not end time:** the weather join is meant to capture the conditions a rider experienced/decided to ride in. For the small fraction of trips that cross midnight, using the start time means a late-night ride that ends after midnight is still attributed to the day it began — which is when the weather-driven decision to take the trip was made. Using end time would instead occasionally attribute a trip to the *next* day's weather, which is harder to justify and would also shift trip counts for "today" depending on how long trips ran, making day-over-day volume comparisons noisier.
+
+**Caveat to disclose:** trips starting just before midnight and ending just after are counted entirely under the start day for both volume and weather-join purposes, even though part of the ride happened on the following calendar day. This affects a tiny fraction of trips and is not corrected for.
