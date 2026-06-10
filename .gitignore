@@ -1,0 +1,4 @@
+# Cloud -- never commit plaintext credentials
+credentials.json
+credentials_clean.json
+/tmp/
