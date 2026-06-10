@@ -9,6 +9,11 @@ This repo uses the `cloud-bootstrap` skill to manage GCP access.
   - `roles/bigquery.dataEditor` — create/write tables in the project's BigQuery dataset for Citibike + weather data
   - `roles/bigquery.jobUser` — run BigQuery load/query jobs for the ETL pipeline and dashboard
   - `roles/run.developer` — deploy/update the Streamlit dashboard as a Cloud Run service
+  - `roles/storage.admin` — create/manage the GCS bucket holding raw Citibike data
+
+### Storage
+
+Raw Citibike trip data (downloaded from the public `s3://tripdata` bucket) is mirrored to the GCS bucket `msbai-dwd-csc9720-citibike-raw`.
 
 Note: reading `nyu-datasets.weather.m_weather_daily_nyc` is a cross-project read. The `nyu-datasets` project owner must separately grant this service account (or the relevant user) read access to that dataset; it is not covered by the roles above.
 
