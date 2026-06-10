@@ -105,3 +105,63 @@ Citibike timestamps (`starttime`/`started_at`, `stoptime`/`ended_at`) are record
 **Why start time, not end time:** the weather join is meant to capture the conditions a rider experienced/decided to ride in. For the small fraction of trips that cross midnight, using the start time means a late-night ride that ends after midnight is still attributed to the day it began — which is when the weather-driven decision to take the trip was made. Using end time would instead occasionally attribute a trip to the *next* day's weather, which is harder to justify and would also shift trip counts for "today" depending on how long trips ran, making day-over-day volume comparisons noisier.
 
 **Caveat to disclose:** trips starting just before midnight and ending just after are counted entirely under the start day for both volume and weather-join purposes, even though part of the ride happened on the following calendar day. This affects a tiny fraction of trips and is not corrected for.
+
+## Pipeline Architecture
+
+### The staircase, as we'll build it
+
+```
+S3 archive  ->  GCS (raw mirror)  ->  raw_* tables (per schema era)  ->  trips_unified (clean view)  ->  daily_summary (view)  ->  daily_summary_materialized (table)
+```
+
+One refinement vs. the generic staircase: **"raw tables" is split by schema era** (`raw_trips_schema_a`, `raw_trips_schema_b` — see decision 3 above), each loaded with a fixed, explicit column list/types for that era. This is the minimum normalization needed just to get BigQuery to accept the load (consistent columns per table) — it is *not* the same as cleaning. `trips_unified` is the view that UNIONs both raw tables with renamed/cast columns, adds `system`, `duration_seconds`, `distance_km_straight_line`, and `trip_date` (decision 5), and applies the coordinate-sanity filter from decision 4.
+
+### Why land in GCS first instead of loading straight to BigQuery?
+
+- **Decouples a flaky, idiosyncratic download from the load step.** The S3 archive has real inconsistencies (typo'd filenames, `__MACOSX` junk, nested zips, split CSVs — decision 1). Sorting that out is "fetch and unzip" work, separate from "get bytes into BigQuery" work. If the BigQuery load step fails or needs to be re-run with a schema fix, we don't want to re-hit a third-party S3 bucket 170 times.
+- **GCS load jobs are batch, parallel, and retryable** — `bq load` / `LOAD DATA` from `gs://...` with wildcards is far more efficient than streaming 300M+ rows row-by-row, and a failed load job can simply be re-run against the same GCS objects.
+- **Durable, immutable source-of-truth copy.** The GCS bucket is *our* copy of exactly what the public archive contained at sync time (28.73 GB, 170 objects, verified count/size match). If Citibike's S3 bucket changes or disappears, or if we discover a bug in our parsing months from now, we can reprocess from GCS without depending on the public archive's continued availability or unchanged contents.
+- **Separation of concerns for debugging.** "Is the raw byte-for-byte copy correct?" (GCS vs. S3) and "did the load/parse logic produce the right table?" (BigQuery vs. GCS) become two independently checkable questions instead of one tangled one.
+
+### Why load untouched and clean in a view, rather than cleaning at load time?
+
+- **Raw tables are the audit trail.** If a cleaning rule turns out to be wrong (e.g., the coordinate-sanity filter in decision 4, or the day-boundary rule in decision 5), we can fix the view definition and instantly get corrected results — no re-load of 28 GB+ from GCS, no re-running an hours-long ETL job.
+- **Cleaning logic belongs in SQL, versioned and reviewable**, not buried in a one-shot load script. A view's `SELECT` is the single place where every harmonization decision (column renaming across schema eras, `duration_seconds` computation, `system` tagging, distance, day assignment) is visible together — which is also exactly the set of decisions documented above.
+- **Cheap to iterate.** Re-running `CREATE OR REPLACE VIEW` is instant; re-running a load of the full history is not. Given we already know the raw data has known oddities (decision 1) and at least one open factual assumption to verify (DST/timezone handling in decision 5), we expect to revise the cleaning logic — better to make that revision free.
+- **Materialization happens at the bottom of the staircase, not the top.** We only pay the cost of "bake this into a physical table" once, for the small daily-summary grain (~4,700 rows/region/rider-type), not for the 300M-row raw-to-clean transform, which stays a view and is computed on demand (or could be materialized later if dashboard latency requires it).
+
+## Validation Plan ("Done" Means...)
+
+**"The pipeline ran without errors" is not the bar.** Each deliverable below is checked against an independent source of truth — numbers we did not produce ourselves.
+
+### Independent source of truth: `nyu-datasets.citibike`
+
+This project's service account already has read access (no extra grant needed — confirmed working) to `nyu-datasets.citibike`, which contains:
+- `m_trips_unified`: 319,189,169 trips, 2013-06-01 through 2026-05-31, with `region`, `member_casual`, `rideable_type`, `distance_meters`, `trip_duration_seconds`, etc. — i.e., someone else's already-cleaned version of the same source data.
+- `m_daily_trips`: 4,738 rows, one per day, with `num_trips`, `num_nyc_trips`, `num_jc_trips`, `num_member_trips`, `num_casual_trips`, `num_classic_trips`, `num_electric_trips`, `avg_trip_duration_minutes`, `avg_distance_meters` — i.e., someone else's already-built daily summary, the same shape as deliverable 2/3.
+
+This is the "cheat" option the task describes, and it's available — but per the task's own caveat, it's not a reference any other project could use, so it should be treated as a **cross-check to catch gross errors**, not as the formal definition of correctness. The formal definition of correctness should still be "matches what the raw archive actually contains" (decisions 1–5 above).
+
+**Secondary source (not yet accessible):** Citibike's monthly operating reports at `citibikenyc.com/system-data/operating-reports` returned HTTP 403 when fetched from this environment (likely bot-blocked). If a team member can access these manually, they'd give a few independently-published monthly ridership totals — useful as a tertiary spot-check, especially if the `nyu-datasets` cross-check ever disagrees with our numbers and we need to know which side is wrong. Treat as a TODO, not a blocker.
+
+### Deliverable 1: Trip data loaded into BigQuery (full history)
+
+**Done means:**
+- Total row count in `trips_unified` is within a small tolerance of `nyu-datasets.citibike.m_trips_unified`'s 319,189,169 (exact match not expected — different load times / dedup choices — but a large gap, e.g. >1%, means something is wrong: a missing month, a double-loaded file, or a parsing failure that silently dropped rows).
+- Date range matches: earliest `trip_date` should be **2013-06** (Citibike launched May 2013; the first archive file is `201306-citibike-tripdata.csv`, confirmed in decision 1's inspection — not January 2013), latest should match the newest file actually in our GCS bucket (2026-05/06).
+- Spot-check the NYC/JC split: our `system='JC'` count vs. `m_trips_unified`'s `region='JC'`-equivalent count (~6.58M) should be in the same ballpark.
+- Per-schema-era row counts are both non-zero and roughly proportional to file sizes (a common failure mode: one era's load silently fails and the union just looks "smaller than expected" rather than erroring).
+
+### Deliverable 2: Daily summary view (one row per day, sliceable by region and rider type)
+
+**Done means:**
+- For a sample of specific days spanning every era — at least one from 2013 (Schema A, Title-Case headers), one from 2019 (Schema A, lowercase headers), one from 2021 (around the Feb schema cutover), one recent (Schema B) — `num_trips`, `num_nyc_trips`, `num_jc_trips`, `num_member_trips`, `num_casual_trips` from our view match `nyu-datasets.citibike.m_daily_trips` for the same date within a small tolerance (a handful of trips, not orders of magnitude).
+- The view actually supports slicing by region (`NYC`/`JC`) and rider type (`member`/`casual`) — i.e., these are real group-by columns, not baked into separate hardcoded columns only.
+- `avg_distance_km` (our straight-line computation) is in a *plausible* relationship to `m_daily_trips.avg_distance_meters` (theirs) — we expect ours to be **lower** (straight-line vs. route distance, decision 4), not higher and not wildly different (e.g., not off by 10x, which would indicate a unit error like meters vs. km or a lat/lng swap).
+
+### Deliverable 3: Materialized daily table built from that view
+
+**Done means:**
+- Row count equals the number of (date × region × rider-type) combinations present in the view — no dropped or duplicated groups from the materialization step.
+- Re-aggregating the materialized table back up (sum across all rows) reproduces deliverable 1's total row count exactly — materialization must not lose or double-count rows relative to its source view.
+- The materialized table is what the Streamlit dashboard actually queries (not the raw view) — confirmed by checking the dashboard's query source, since the whole point of this stair-step is to keep the dashboard off the 300M-row table.
