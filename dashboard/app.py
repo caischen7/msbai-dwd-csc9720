@@ -3,6 +3,8 @@ import plotly.express as px
 import streamlit as st
 from google.cloud import bigquery
 
+import transforms as T
+
 PROJECT = "msbai-dwd-csc9720"
 TABLE = f"{PROJECT}.citibike.daily_summary_with_weather"
 
@@ -11,6 +13,9 @@ st.set_page_config(page_title="NYC Citibike & Weather", layout="wide")
 
 @st.cache_data(ttl=3600)
 def load_data():
+    """Read the small (~14k-row) daily table ONCE per hour and cache it.
+    Every slider move reruns this script top-to-bottom; the cache is what
+    keeps that rerun off BigQuery so the dashboard stays sub-second."""
     client = bigquery.Client(project=PROJECT)
     df = client.query(f"SELECT * FROM `{TABLE}`").to_dataframe()
     df["trip_date"] = pd.to_datetime(df["trip_date"])
@@ -60,17 +65,13 @@ if fdf.empty:
 # ---------------------------------------------------------------------------
 # KPI row
 # ---------------------------------------------------------------------------
-total_trips = int(fdf["num_trips"].sum())
-num_days = fdf["trip_date"].nunique()
-avg_daily_trips = total_trips / num_days if num_days else 0
-avg_duration = (fdf["avg_trip_duration_minutes"] * fdf["num_trips"]).sum() / total_trips if total_trips else 0
-avg_distance = (fdf["avg_distance_km_straight_line"] * fdf["num_trips"]).sum() / total_trips if total_trips else 0
-
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Total trips", f"{total_trips:,}")
-c2.metric("Days covered", f"{num_days:,}")
-c3.metric("Avg trips / day", f"{avg_daily_trips:,.0f}")
-c4.metric("Avg trip duration", f"{avg_duration:,.1f} min")
+k = T.kpis(fdf)
+c1, c2, c3, c4, c5 = st.columns(5)
+c1.metric("Total trips", f"{k['total_trips']:,}")
+c2.metric("Days covered", f"{k['num_days']:,}")
+c3.metric("Avg trips / day", f"{k['avg_daily_trips']:,.0f}")
+c4.metric("Avg trip duration", f"{k['avg_duration_min']:,.1f} min")
+c5.metric("Avg straight-line dist.", f"{k['avg_distance_km']:,.2f} km")
 
 st.divider()
 
@@ -78,8 +79,7 @@ st.divider()
 # Chart 1: Daily trips over time with rolling average
 # ---------------------------------------------------------------------------
 st.subheader("1. Daily ridership over time")
-daily = fdf.groupby("trip_date", as_index=False)["num_trips"].sum().sort_values("trip_date")
-daily["rolling_28d"] = daily["num_trips"].rolling(28, min_periods=7).mean()
+daily = T.daily_trips(fdf)
 
 fig1 = px.line(
     daily,
@@ -119,9 +119,7 @@ fig2 = px.scatter(
 )
 st.plotly_chart(fig2, use_container_width=True)
 
-corr = temp_df.groupby("member_casual")[["tavg_f", "num_trips"]].apply(
-    lambda g: g["tavg_f"].corr(g["num_trips"])
-)
+corr = T.temp_correlation(fdf)
 corr_text = ", ".join(f"{k}: r={v:.2f}" for k, v in corr.items())
 st.caption(
     f"Warmer days mean more trips for both rider types, but casual riders are far more "
@@ -136,18 +134,7 @@ st.divider()
 # Chart 3: Temperature-bucket breakdown of member vs casual share
 # ---------------------------------------------------------------------------
 st.subheader("3. Casual-rider share by temperature band")
-bucket_df = fdf.dropna(subset=["tavg_f"]).copy()
-bins = [-100, 32, 50, 65, 80, 200]
-labels = ["<32F (freezing)", "32-50F", "50-65F", "65-80F", "80F+"]
-bucket_df["temp_band"] = pd.cut(bucket_df["tavg_f"], bins=bins, labels=labels)
-
-share = (
-    bucket_df.groupby(["temp_band", "member_casual"], observed=True)["num_trips"]
-    .sum()
-    .reset_index()
-)
-totals = share.groupby("temp_band", observed=True)["num_trips"].transform("sum")
-share["pct"] = share["num_trips"] / totals * 100
+share = T.casual_share_by_band(fdf)
 
 fig3 = px.bar(
     share,
@@ -155,6 +142,7 @@ fig3 = px.bar(
     y="pct",
     color="member_casual",
     barmode="stack",
+    category_orders={"temp_band": T.TEMP_LABELS},
     labels={"temp_band": "Average daily temperature", "pct": "Share of trips (%)", "member_casual": "Rider type"},
 )
 st.plotly_chart(fig3, use_container_width=True)
@@ -177,27 +165,7 @@ st.divider()
 # Chart 4: Rain/snow impact comparison
 # ---------------------------------------------------------------------------
 st.subheader("4. Impact of rain and snow")
-weather_df = fdf.dropna(subset=["is_rainy", "is_snowy"]).copy()
-
-
-def day_type(row):
-    if row["is_snowy"]:
-        return "Snowy"
-    if row["is_rainy"]:
-        return "Rainy"
-    return "Dry"
-
-
-weather_df["day_type"] = weather_df.apply(day_type, axis=1)
-
-avg_by_type = (
-    weather_df.groupby(["day_type", "member_casual"], as_index=False)
-    .apply(
-        lambda g: pd.Series({"avg_trips": g["num_trips"].sum() / g["trip_date"].nunique()}),
-        include_groups=False,
-    )
-    .reset_index(drop=True)
-)
+avg_by_type = T.avg_by_daytype(fdf)
 
 fig4 = px.bar(
     avg_by_type,
@@ -240,13 +208,7 @@ st.caption(
     "or a shift in how many bikes/stations are available."
 )
 
-tmp = fdf.copy()
-tmp["month"] = tmp["trip_date"].dt.to_period("M")
-monthly = tmp.groupby("month", as_index=False)["num_trips"].sum()
-monthly["trip_date"] = monthly["month"].dt.to_timestamp()
-monthly["month_num"] = monthly["trip_date"].dt.month
-monthly["expected"] = monthly.groupby("month_num")["num_trips"].transform("mean")
-monthly["pct_diff"] = (monthly["num_trips"] - monthly["expected"]) / monthly["expected"] * 100
+monthly = T.actual_vs_expected(fdf)
 
 fig5 = px.line(
     monthly,
