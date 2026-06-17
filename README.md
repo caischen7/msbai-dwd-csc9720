@@ -68,6 +68,20 @@ cd dashboard && ./deploy.sh                       # builds via Cloud Build, depl
 Deployment notes (and why the live world differs from local) are in
 [`docs/DASHBOARD_DECISIONS.md`](docs/DASHBOARD_DECISIONS.md).
 
+## Teaching team access
+
+The following people have been granted **collaborator access** to this GitHub repo
+and **BigQuery Data Viewer** access to the `msbai-dwd-csc9720` GCP project:
+
+- pi1@stern.nyu.edu
+- it2190@stern.nyu.edu
+
+## Cost controls
+
+A **$10 billing budget alert** is set on the `msbai-dwd-csc9720` GCP project
+(Billing → Budgets & alerts). The Cloud Run dashboard scales to zero when not in
+use and costs essentially nothing to leave running for grading.
+
 ## Cloud setup
 
 Credentials are managed by the `cloud-bootstrap` skill; see
