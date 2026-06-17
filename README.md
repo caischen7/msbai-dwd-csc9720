@@ -1,2 +1,79 @@
 # msbai-dwd-csc9720
-Class project for Dealing with Data: an ETL pipeline that loads Citibike data into BigQuery and serves a Streamlit dashboard joined to NYC weather.
+
+Class project for *Dealing with Data*: an ETL pipeline that loads the full
+Citibike trip history (2013–2026) into BigQuery, joins it to NYC daily weather,
+and serves an interactive Streamlit dashboard on Cloud Run.
+
+## Public dashboard URL
+
+> **Not yet deployed.** Deployment requires the GCP service-account passphrase
+> (`GCP_CREDENTIALS_KEY`), which is not present in the current environment, so
+> the live deploy + URL are pending. See
+> [`docs/DASHBOARD_DECISIONS.md`](docs/DASHBOARD_DECISIONS.md) → "Diagnose" for
+> the one-line unblock. Once deployed via `dashboard/deploy.sh`, paste the
+> Cloud Run URL here:
+>
+> `https://citibike-dashboard-<hash>-uc.a.run.app`  *(placeholder)*
+
+## What's here
+
+```
+etl/                       Part 1 — S3 -> GCS -> BigQuery pipeline
+  uniform_transform.py     S3/GCS archives -> normalized 19-col CSVs (parallel)
+  build_pipeline.py        uniform CSVs -> raw_trips + trips_unified + daily_summary(+_materialized)
+  build_weather_summary.py daily_summary_materialized JOIN weather -> daily_summary_with_weather
+dashboard/                 Part 2 — Streamlit app
+  app.py                   the dashboard (reads one cached daily table)
+  transforms.py            pure aggregation logic (no Streamlit/BigQuery)
+  test_transforms.py       offline correctness check (hand-computed answers)
+  Dockerfile               Cloud Run container
+  deploy.sh                one-command deploy to a public Cloud Run URL
+docs/
+  PIPELINE.md              Part 1 design decisions + validation
+  DASHBOARD_SPEC.md        Part 2 spec: questions, filters, slices, verify targets
+  DASHBOARD_DECISIONS.md   Part 2 memo: defends the spec + reports verification
+```
+
+## The dashboard
+
+Five charts, all filterable by date range, region (NYC/JC), and rider type
+(member/casual). The questions they answer and the per-chart claims are in
+[`docs/DASHBOARD_SPEC.md`](docs/DASHBOARD_SPEC.md). Data source:
+`citibike.daily_summary_with_weather` (trips) joined to
+`nyu-datasets.weather.m_weather_daily_nyc` (Central Park).
+
+### Run the tests (no cloud access needed)
+
+```bash
+python3 dashboard/test_transforms.py     # 6/6 should pass
+```
+
+### Run locally
+
+```bash
+pip install -r dashboard/requirements.txt
+# requires active GCP credentials (Application Default Credentials)
+streamlit run dashboard/app.py
+```
+
+### Build the data table the dashboard reads
+
+```bash
+python3 etl/build_weather_summary.py --inspect   # confirm weather schema/units
+python3 etl/build_weather_summary.py             # build daily_summary_with_weather
+```
+
+### Deploy to a public URL
+
+```bash
+cd dashboard && ./deploy.sh                       # builds via Cloud Build, deploys to Cloud Run
+```
+
+Deployment notes (and why the live world differs from local) are in
+[`docs/DASHBOARD_DECISIONS.md`](docs/DASHBOARD_DECISIONS.md).
+
+## Cloud setup
+
+Credentials are managed by the `cloud-bootstrap` skill; see
+[`CLAUDE.md`](CLAUDE.md). Authentication is automatic via the `SessionStart`
+hook **when the passphrase env var is set**.
