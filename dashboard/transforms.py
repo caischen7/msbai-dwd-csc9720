@@ -242,3 +242,65 @@ def ebike_revenue(df):
         EBIKE_RATE_MEMBER_PER_MIN * scope.loc[~casual_mask, "avg_trip_duration_minutes"] * scope.loc[~casual_mask, "num_electric_trips"]
     )
     return scope[["trip_date", "member_casual", "est_revenue", "num_electric_trips", "avg_trip_duration_minutes"]]
+
+
+# ---------------------------------------------------------------------------
+# Additional charts (Charts 9-12)
+# ---------------------------------------------------------------------------
+
+def dow_month_heatmap(df):
+    """Avg daily trips by day-of-week × month. One cell = avg over all years.
+    Returns wide pivot: rows=day_of_week (0=Mon), cols=month (1-12)."""
+    tmp = df.copy()
+    tmp["trip_date"] = pd.to_datetime(tmp["trip_date"])
+    tmp["dow"] = tmp["trip_date"].dt.dayofweek   # 0=Mon, 6=Sun
+    tmp["month"] = tmp["trip_date"].dt.month
+    # sum across systems/rider types first, then average across dates
+    daily = tmp.groupby(["trip_date", "dow", "month"])["num_trips"].sum().reset_index()
+    pivot = daily.groupby(["dow", "month"])["num_trips"].mean().unstack("month")
+    pivot.index = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    pivot.columns = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    return pivot
+
+
+def yoy_growth(df):
+    """Annual trip totals by system, for year-over-year comparison.
+    Returns long-form: year, system, num_trips."""
+    tmp = df.copy()
+    tmp["trip_date"] = pd.to_datetime(tmp["trip_date"])
+    tmp["year"] = tmp["trip_date"].dt.year
+    # exclude partial years at the edges
+    year_counts = tmp.groupby("year")["trip_date"].nunique()
+    full_years = year_counts[year_counts >= 300].index
+    filtered = tmp[tmp["year"].isin(full_years)]
+    return (
+        filtered.groupby(["year", "system"], as_index=False)["num_trips"]
+        .sum()
+        .sort_values(["year", "system"])
+    )
+
+
+def fleet_shift(df):
+    """Monthly % of trips that are electric (2021-02+), by system.
+    Returns long-form: trip_date (month start), system, pct_electric."""
+    tmp = df[pd.to_datetime(df["trip_date"]) >= pd.Timestamp("2021-02-01")].copy()
+    tmp["trip_date"] = pd.to_datetime(tmp["trip_date"])
+    tmp["month"] = tmp["trip_date"].dt.to_period("M")
+    grp = tmp.groupby(["month", "system"])[["num_trips", "num_electric_trips"]].sum().reset_index()
+    grp["pct_electric"] = grp["num_electric_trips"] / grp["num_trips"].clip(lower=1) * 100
+    grp["trip_date"] = grp["month"].dt.to_timestamp()
+    return grp[["trip_date", "system", "pct_electric", "num_trips", "num_electric_trips"]]
+
+
+def weekday_vs_weekend(df):
+    """Avg trips per day on weekdays vs weekends, split by member_casual.
+    Returns long-form: day_class, member_casual, avg_trips."""
+    tmp = df.copy()
+    tmp["trip_date"] = pd.to_datetime(tmp["trip_date"])
+    tmp["day_class"] = tmp["trip_date"].dt.dayofweek.map(
+        lambda d: "Weekend" if d >= 5 else "Weekday"
+    )
+    grp = tmp.groupby(["day_class", "member_casual"])
+    avg = (grp["num_trips"].sum() / grp["trip_date"].nunique()).reset_index(name="avg_trips")
+    return avg

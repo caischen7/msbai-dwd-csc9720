@@ -380,9 +380,137 @@ else:
     )
 
 st.divider()
+
+# ---------------------------------------------------------------------------
+# Chart 9: Day-of-week × month heatmap
+# ---------------------------------------------------------------------------
+st.subheader("9. When do people ride? Day-of-week × season heatmap")
+heatmap_data = T.dow_month_heatmap(fdf)
+fig9 = px.imshow(
+    heatmap_data,
+    color_continuous_scale="YlOrRd",
+    aspect="auto",
+    labels={"x": "Month", "y": "Day of week", "color": "Avg trips / day"},
+)
+fig9.update_xaxes(side="top")
+st.plotly_chart(fig9, use_container_width=True)
+peak_dow = heatmap_data.mean(axis=1).idxmax()
+peak_month = heatmap_data.mean(axis=0).idxmax()
+st.caption(
+    f"Ridership peaks on **{peak_dow}s in {peak_month}** — the intersection of the "
+    f"busiest day of the week and the busiest season. Weekends in summer are dominated "
+    f"by casual/leisure riders; weekday patterns hold steady year-round from members "
+    f"commuting regardless of season."
+)
+
+st.divider()
+
+# ---------------------------------------------------------------------------
+# Chart 10: Year-over-year growth
+# ---------------------------------------------------------------------------
+st.subheader("10. Year-over-year growth by region")
+yoy = T.yoy_growth(fdf)
+if not yoy.empty:
+    fig10 = px.bar(
+        yoy,
+        x="year",
+        y="num_trips",
+        color="system",
+        barmode="group",
+        labels={"year": "Year", "num_trips": "Total trips", "system": "Region"},
+        text=yoy["num_trips"].apply(lambda x: f"{x/1e6:.1f}M"),
+    )
+    fig10.update_traces(textposition="outside")
+    st.plotly_chart(fig10, use_container_width=True)
+
+    nyc = yoy[yoy["system"] == "NYC"].set_index("year")["num_trips"]
+    if len(nyc) >= 2:
+        first_yr, last_yr = nyc.index.min(), nyc.index.max()
+        cagr = ((nyc[last_yr] / nyc[first_yr]) ** (1 / max(last_yr - first_yr, 1)) - 1) * 100
+        st.caption(
+            f"NYC ridership grew from {nyc[first_yr]/1e6:.1f}M trips in {first_yr} to "
+            f"{nyc[last_yr]/1e6:.1f}M in {last_yr} — a {cagr:.1f}% compound annual growth rate. "
+            f"Years that fall below the trend (like 2020) reflect real disruptions "
+            f"that weather alone cannot explain."
+        )
+
+st.divider()
+
+# ---------------------------------------------------------------------------
+# Chart 11: Fleet transition — classic → electric (2021+)
+# ---------------------------------------------------------------------------
+st.subheader("11. Fleet shift: classic → electric bikes (2021 onward)")
+fleet = T.fleet_shift(fdf)
+if fleet.empty:
+    st.info("No electric bike data in the current selection. Extend the date range to include 2021+.")
+else:
+    fig11 = px.line(
+        fleet,
+        x="trip_date",
+        y="pct_electric",
+        color="system",
+        labels={
+            "trip_date": "Month",
+            "pct_electric": "E-bike share of trips (%)",
+            "system": "Region",
+        },
+    )
+    fig11.add_hline(y=50, line_dash="dash", line_color="gray",
+                    annotation_text="50% e-bike", annotation_position="right")
+    st.plotly_chart(fig11, use_container_width=True)
+
+    latest_pct = fleet.groupby("system")["pct_electric"].last()
+    caption_parts = [f"{sys}: {pct:.0f}%" for sys, pct in latest_pct.items()]
+    st.caption(
+        f"E-bikes have grown from 0% to {', '.join(caption_parts)} of all trips "
+        f"since Feb 2021, driven by fleet expansion and rider preference for lower "
+        f"effort on longer or hillier trips. The shift matters for revenue: e-bike "
+        f"trips carry a per-minute charge that classic trips (for members) do not."
+    )
+
+st.divider()
+
+# ---------------------------------------------------------------------------
+# Chart 12: Weekday vs weekend — the commuter vs leisure split
+# ---------------------------------------------------------------------------
+st.subheader("12. Weekday vs. weekend — commuters vs. leisure riders")
+ww = T.weekday_vs_weekend(fdf)
+fig12 = px.bar(
+    ww,
+    x="day_class",
+    y="avg_trips",
+    color="member_casual",
+    barmode="group",
+    category_orders={"day_class": ["Weekday", "Weekend"]},
+    labels={
+        "day_class": "",
+        "avg_trips": "Avg trips / day",
+        "member_casual": "Rider type",
+    },
+    text=ww["avg_trips"].apply(lambda x: f"{int(x):,}"),
+)
+fig12.update_traces(textposition="outside")
+st.plotly_chart(fig12, use_container_width=True)
+
+try:
+    ww_pivot = ww.pivot(index="member_casual", columns="day_class", values="avg_trips")
+    if "Weekday" in ww_pivot.columns and "Weekend" in ww_pivot.columns:
+        casual_lift = (ww_pivot.loc["casual", "Weekend"] / ww_pivot.loc["casual", "Weekday"] - 1) * 100
+        member_drop = (1 - ww_pivot.loc["member", "Weekend"] / ww_pivot.loc["member", "Weekday"]) * 100
+        st.caption(
+            f"Members ride **{member_drop:.0f}% less** on weekends — they commute on "
+            f"weekdays and don't need the bike on Saturday. Casual riders ride "
+            f"**{casual_lift:.0f}% more** on weekends — leisure and tourism peak when "
+            f"offices are closed. Weekend promotions therefore target the high-margin "
+            f"casual segment at exactly the moment they're most active."
+        )
+except (KeyError, ValueError):
+    pass
+
+st.divider()
 st.caption(
     "Source: Citibike trip data (2013-2026) from public S3 archives, processed via "
     "GCS -> BigQuery ETL pipeline. Weather: `nyu-datasets.weather.m_weather_daily_nyc`. "
-    "`distance_km_straight_line` is the great-circle distance between start/end "
-    "stations, not actual ride distance."
+    "`distance_km_straight_line` is great-circle distance, not actual ride distance. "
+    "E-bike revenue estimates use Citibike 2025 pricing as a yardstick."
 )
