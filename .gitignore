@@ -2,3 +2,8 @@
 credentials.json
 credentials_clean.json
 /tmp/
+
+# Python
+__pycache__/
+*.pyc
+.claude/worktrees/
