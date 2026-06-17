@@ -68,13 +68,13 @@ def inspect_weather():
 WEATHER_SRC = f"""
   SELECT
     date AS w_date,
-    tavg AS tavg_f,                 -- ASSUMES Fahrenheit. If Celsius: tavg * 9/5 + 32
-    tmax AS tmax_f,                 -- (likewise)
-    tmin AS tmin_f,                 -- (likewise)
-    prcp AS prcp_in,                -- ASSUMES inches
-    snow AS snow_in,                -- ASSUMES inches
-    prcp >= 0.01 AS is_rainy,       -- NWS "measurable precipitation" threshold
-    COALESCE(snow, 0) >= 0.1 AS is_snowy
+    tavg_f,
+    tmax_f,
+    tmin_f,
+    prcp_inches AS prcp_in,
+    snow_inches AS snow_in,
+    CAST(is_rainy AS BOOL) AS is_rainy,
+    CAST(COALESCE(is_snowy, 0) AS BOOL) AS is_snowy
   FROM `{WEATHER_TABLE}`
 """
 
