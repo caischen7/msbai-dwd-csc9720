@@ -6,14 +6,10 @@ and serves an interactive Streamlit dashboard on Cloud Run.
 
 ## Public dashboard URL
 
-> **Not yet deployed.** Deployment requires the GCP service-account passphrase
-> (`GCP_CREDENTIALS_KEY`), which is not present in the current environment, so
-> the live deploy + URL are pending. See
-> [`docs/DASHBOARD_DECISIONS.md`](docs/DASHBOARD_DECISIONS.md) → "Diagnose" for
-> the one-line unblock. Once deployed via `dashboard/deploy.sh`, paste the
-> Cloud Run URL here:
->
-> `https://citibike-dashboard-<hash>-uc.a.run.app`  *(placeholder)*
+**https://citibike-dashboard-894638510471.us-central1.run.app**
+
+No login required. Loads the full interactive dashboard (12 charts) from a
+cached daily table — no per-interaction BigQuery queries.
 
 ## What's here
 
@@ -36,7 +32,7 @@ docs/
 
 ## The dashboard
 
-Five charts, all filterable by date range, region (NYC/JC), and rider type
+Twelve charts, all filterable by date range, region (NYC/JC), and rider type
 (member/casual). The questions they answer and the per-chart claims are in
 [`docs/DASHBOARD_SPEC.md`](docs/DASHBOARD_SPEC.md). Data source:
 `citibike.daily_summary_with_weather` (trips) joined to
