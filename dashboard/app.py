@@ -1,9 +1,19 @@
+import math
+import numpy as np
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 from google.cloud import bigquery
 
 import transforms as T
+from transforms import (
+    build_weather_model,
+    compute_residuals,
+    fetch_forecast,
+    predict_forecast,
+    ebike_revenue,
+)
 
 PROJECT = "msbai-dwd-csc9720"
 TABLE = f"{PROJECT}.citibike.daily_summary_with_weather"
@@ -230,6 +240,144 @@ st.caption(
     f"{best['trip_date'].strftime('%B %Y')}, at +{best['pct_diff']:.0f}% above expected "
     f"({int(best['num_trips']):,} vs. {int(best['expected']):,} expected)."
 )
+
+# ── Stretch 1: Weather-adjusted ridership model ──────────────────────────────
+st.divider()
+st.subheader("6. Weather-Adjusted Ridership Model")
+st.info("Weather model uses full history — not affected by sidebar filters.")
+
+
+@st.cache_data(ttl=3600)
+def get_model_results(_df):
+    return build_weather_model(_df)
+
+
+with st.spinner("Fitting weather model (runs once, then cached)…"):
+    model, mape_pct, test_df = get_model_results(df)
+
+residuals_df = compute_residuals(df, model)
+std_resid = residuals_df["residual_pct"].std()
+residuals_df["outlier"] = residuals_df["residual_pct"].abs() > 2 * std_resid
+
+fig6a = go.Figure()
+fig6a.add_trace(go.Scatter(x=residuals_df["trip_date"], y=residuals_df["num_trips"],
+    mode="lines", name="Actual", line=dict(color="#636EFA")))
+fig6a.add_trace(go.Scatter(x=residuals_df["trip_date"], y=residuals_df["predicted_trips"],
+    mode="lines", name="Model expected", line=dict(color="#EF553B", dash="dot")))
+fig6a.update_layout(title="Actual vs. Weather-Expected Daily Trips (all regions, all rider types)",
+    xaxis_title="Date", yaxis_title="Trips", legend=dict(orientation="h"))
+st.plotly_chart(fig6a, use_container_width=True)
+
+colors = ["red" if o else "#AB63FA" for o in residuals_df["outlier"]]
+fig6b = go.Figure()
+fig6b.add_trace(go.Bar(x=residuals_df["trip_date"], y=residuals_df["residual_pct"],
+    marker_color=colors, name="Residual %"))
+fig6b.add_hline(y=0, line_dash="dash", line_color="gray")
+fig6b.update_layout(title="Residual % (Actual − Expected) / Expected — outliers flagged in red",
+    xaxis_title="Date", yaxis_title="Residual %")
+st.plotly_chart(fig6b, use_container_width=True)
+st.caption(
+    "Days when actual falls far below the weather-based expectation signal an operational problem, "
+    "not a weather event. "
+    f"Model: GradientBoostingRegressor trained on pre-2024 data; test-set MAPE = {mape_pct:.1f}%. "
+    "Note: model uses full unfiltered dataset (aggregate of all systems/rider types)."
+)
+
+# ── Stretch 2: 7-day forecast ─────────────────────────────────────────────────
+st.divider()
+st.subheader("7. 7-Day Ridership Forecast")
+st.info("Weather model uses full history — not affected by sidebar filters.")
+
+
+@st.cache_data(ttl=3600)
+def get_forecast():
+    return fetch_forecast()
+
+
+forecast_raw = get_forecast()
+if forecast_raw is None:
+    st.warning("Forecast unavailable — could not reach Open-Meteo API. Try again later.")
+else:
+    forecast_pred = predict_forecast(model, forecast_raw)
+    fig7 = go.Figure()
+    fig7.add_trace(go.Bar(
+        x=forecast_pred["trip_date"].dt.strftime("%a %b %d"),
+        y=forecast_pred["predicted_trips"].round().astype(int),
+        marker_color="#00CC96",
+        name="Predicted trips",
+    ))
+    fig7.update_layout(title="Predicted Daily Trips — Next 7 Days (NYC coordinates)",
+        xaxis_title="Date", yaxis_title="Predicted trips")
+    st.plotly_chart(fig7, use_container_width=True)
+    st.caption(
+        f"This model predicted 2024+ ridership within {mape_pct:.1f}% on held-out data it had never seen. "
+        "Forecast weather from Open-Meteo (open-meteo.com); model trained on Citibike history 2013–2023. "
+        "All regions and rider types combined."
+    )
+
+# ── Stretch 3: E-bike revenue estimate ───────────────────────────────────────
+st.divider()
+st.subheader("8. E-Bike Revenue Estimate")
+
+ebike_df = ebike_revenue(fdf)
+
+if ebike_df.empty:
+    st.info("No e-bike data available for the current filter selection (requires 2021-02+ and electric trips > 0).")
+else:
+    total_rev = ebike_df["est_revenue"].sum()
+    st.metric("Total estimated e-bike revenue (selection)", f"${total_rev:,.0f}")
+
+    # Grouped bar: avg daily revenue on Dry/Rainy/Snowy days by member_casual
+    ebike_weather = fdf[
+        (pd.to_datetime(fdf["trip_date"]) >= pd.Timestamp("2021-02-01"))
+        & (fdf["num_electric_trips"] > 0)
+    ].copy()
+    if "prcp_in" in ebike_weather.columns and "snow_in" in ebike_weather.columns:
+        def weather_cat(row):
+            if row["snow_in"] > 0.1:
+                return "Snowy"
+            elif row["prcp_in"] > 0.1:
+                return "Rainy"
+            else:
+                return "Dry"
+        ebike_weather["weather_cat"] = ebike_weather.apply(weather_cat, axis=1)
+        # merge revenue
+        rev_by_day = ebike_df.groupby(["trip_date", "member_casual"])["est_revenue"].sum().reset_index()
+        ebike_weather_daily = ebike_weather.groupby(["trip_date", "member_casual"]).agg(
+            prcp_in=("prcp_in", "first"), snow_in=("snow_in", "first")
+        ).reset_index()
+        ebike_weather_daily["weather_cat"] = ebike_weather_daily.apply(weather_cat, axis=1)
+        merged_w = ebike_weather_daily.merge(rev_by_day, on=["trip_date", "member_casual"], how="left")
+        avg_by_weather = merged_w.groupby(["weather_cat", "member_casual"])["est_revenue"].mean().reset_index()
+
+        fig8a = px.bar(avg_by_weather, x="weather_cat", y="est_revenue", color="member_casual",
+            barmode="group", category_orders={"weather_cat": ["Dry", "Rainy", "Snowy"]},
+            labels={"est_revenue": "Avg daily e-bike revenue ($)", "weather_cat": "Weather", "member_casual": "Rider type"},
+            title="Avg Daily E-Bike Revenue by Weather Condition and Rider Type")
+        st.plotly_chart(fig8a, use_container_width=True)
+
+        # Headline
+        dry_rev = avg_by_weather[avg_by_weather["weather_cat"] == "Dry"]["est_revenue"].sum()
+        snowy_rev = avg_by_weather[avg_by_weather["weather_cat"] == "Snowy"]["est_revenue"].sum()
+        if snowy_rev > 0 and dry_rev > 0:
+            st.markdown(f"**A snowy day costs ~${dry_rev - snowy_rev:,.0f} vs a dry day in e-bike revenue.**")
+
+    # Line chart: monthly total e-bike revenue 2021+
+    ebike_df2 = ebike_df.copy()
+    ebike_df2["month"] = ebike_df2["trip_date"].dt.to_period("M").dt.to_timestamp()
+    monthly_rev = ebike_df2.groupby("month")["est_revenue"].sum().reset_index()
+    fig8b = px.line(monthly_rev, x="month", y="est_revenue",
+        labels={"est_revenue": "Monthly e-bike revenue ($)", "month": "Month"},
+        title="Monthly Total Estimated E-Bike Revenue (Feb 2021+)")
+    st.plotly_chart(fig8b, use_container_width=True)
+
+    st.caption(
+        "Pricing schedule (Citibike 2025 rates applied as a historical yardstick): "
+        "Casual e-bike: $1.00 unlock + $0.26/min; Member e-bike: $0.17/min. "
+        "Scope: Feb 2021+ rows where num_electric_trips > 0. "
+        "avg_trip_duration_minutes is the group-level average (not e-bike specific) — "
+        "revenue figures are estimates only. Today's prices applied historically."
+    )
 
 st.divider()
 st.caption(

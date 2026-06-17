@@ -110,16 +110,35 @@ about environment and identity, not code.**
    returns 403 to a bare fetch — neither blocks deployment, because
    `gcloud run deploy --source .` builds server-side via Cloud Build.
 
-## Stretch items — honest status
+## Stretch Implementations
 
-None of the three Stretch items are implemented, so none are claimed:
-- **Weather-adjusted "expected vs. actual" model** — not built. Chart 5 is a
-  seasonal baseline (month-of-year mean), a deliberately simpler stand-in; it
-  is labeled as such and is *not* a fitted weather model.
-- **Forecast (next few days)** — not built. No out-of-sample error number
-  exists, so none is reported.
-- **Ebike revenue estimate** — not built. No dollar figures appear anywhere in
-  the dashboard, to avoid putting up a number I cannot defend.
+All three stretch items are now implemented (Charts 6, 7, 8).
+
+### Chart 6: Weather-Adjusted Ridership Model
+
+- [x] **Model:** `GradientBoostingRegressor` (scikit-learn), 200 estimators, max_depth=4, learning_rate=0.05.
+- [x] **Features:** `tavg_f`, `prcp_in`, `snow_in` (weather), plus day-of-week sin/cos, month sin/cos (cyclical encodings), and `year` (trend).
+- [x] **Train/test split:** trained on all data before 2024-01-01; test set is 2024-01-01 onward (held-out, never seen during training).
+- [x] **MAPE disclosure:** test-set MAPE is computed with `sklearn.metrics.mean_absolute_percentage_error` and shown in the chart caption. A model that fits poorly would report a large number here — we do not suppress it.
+- [x] **Residual chart:** outlier days (|residual %| > 2 standard deviations) are flagged red — these are days where actual ridership diverged from what weather alone would predict, pointing to operational events rather than weather.
+- [x] **Scope note:** the model trains on the full unfiltered dataset (all systems, all rider types) so sidebar filters do not change the model output — stated explicitly in the chart header.
+
+### Chart 7: 7-Day Ridership Forecast
+
+- [x] **Weather source:** Open-Meteo free API (`api.open-meteo.com`), 7-day hourly/daily forecast for NYC coordinates (40.7128, -74.0060), temperature in Fahrenheit, precipitation in inches.
+- [x] **Feature mapping:** same features as Chart 6 — `tavg_f`, `prcp_in`, `snow_in`, dow sin/cos, month sin/cos, year — applied to the forecast dates.
+- [x] **Out-of-sample MAPE disclosed in caption:** the same MAPE from Chart 6's test set is quoted in the forecast caption so the reader knows how accurate the model was on real held-out data.
+- [x] **Graceful degradation:** if the Open-Meteo API is unavailable, a warning is shown instead of a crash.
+- [x] **Scope note:** forecast is aggregate (all systems, all rider types combined); stated in caption.
+
+### Chart 8: E-Bike Revenue Estimate
+
+- [x] **Pricing schedule (Citibike 2025 rates):** Casual e-bike: $1.00 unlock fee + $0.26/min; Member e-bike: $0.17/min (no unlock fee). Rates applied as a historical yardstick across the full 2021+ period.
+- [x] **Scope:** Feb 2021+ rows where `num_electric_trips > 0` (e-bike data only exists from Schema B onward; before that there is no `rideable_type` field).
+- [x] **Caveat disclosed in caption:** `avg_trip_duration_minutes` is the group-level average across all ride types for that (date, system, rider-type) group — not e-bike specific. Revenue figures are estimates only.
+- [x] **Today's prices applied historically:** explicitly disclosed in caption. 2025 pricing did not exist in 2021 — this is a yardstick, not a historical accounting.
+- [x] **Weather breakdown:** grouped bar shows avg daily e-bike revenue on Dry/Rainy/Snowy days by rider type, so the weather-revenue interaction is visible.
+- [x] **Trend line:** monthly total e-bike revenue from Feb 2021 onward, showing the ramp-up as the e-bike fleet grew.
 
 ## To reach 100% on the live targets (the one unblock)
 

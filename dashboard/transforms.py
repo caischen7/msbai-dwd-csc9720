@@ -13,10 +13,19 @@ The dashboard's input columns (from citibike.daily_summary_with_weather):
   is_rainy, is_snowy
 """
 
+import math
+import requests
+import numpy as np
 import pandas as pd
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.metrics import mean_absolute_percentage_error
 
 TEMP_BINS = [-100, 32, 50, 65, 80, 200]
 TEMP_LABELS = ["<32F (freezing)", "32-50F", "50-65F", "65-80F", "80F+"]
+
+EBIKE_RATE_CASUAL_PER_MIN = 0.26
+EBIKE_RATE_MEMBER_PER_MIN = 0.17
+EBIKE_UNLOCK_CASUAL = 1.00
 
 
 def kpis(df):
@@ -107,3 +116,129 @@ def actual_vs_expected(df):
     monthly["expected"] = monthly.groupby("month_num")["num_trips"].transform("mean")
     monthly["pct_diff"] = (monthly["num_trips"] - monthly["expected"]) / monthly["expected"] * 100
     return monthly
+
+
+def _daily_totals(df):
+    """Aggregate df to one row per date with weather cols."""
+    weather_cols = [c for c in ["tavg_f", "prcp_in", "snow_in"] if c in df.columns]
+    agg = {
+        "num_trips": "sum",
+        "num_electric_trips": "sum",
+        "avg_trip_duration_minutes": "mean",
+    }
+    for w in weather_cols:
+        agg[w] = "first"
+    daily = df.groupby("trip_date").agg(agg).reset_index()
+    return daily
+
+
+def _make_features(daily):
+    """Build feature matrix from daily df."""
+    d = daily.copy()
+    d["trip_date"] = pd.to_datetime(d["trip_date"])
+    d["dow"] = d["trip_date"].dt.dayofweek
+    d["month"] = d["trip_date"].dt.month
+    d["year"] = d["trip_date"].dt.year
+    d["dow_sin"] = np.sin(2 * math.pi * d["dow"] / 7)
+    d["dow_cos"] = np.cos(2 * math.pi * d["dow"] / 7)
+    d["month_sin"] = np.sin(2 * math.pi * d["month"] / 12)
+    d["month_cos"] = np.cos(2 * math.pi * d["month"] / 12)
+    feature_cols = ["tavg_f", "prcp_in", "snow_in", "dow_sin", "dow_cos", "month_sin", "month_cos", "year"]
+    # drop rows missing any feature
+    d = d.dropna(subset=feature_cols + ["num_trips"])
+    return d, feature_cols
+
+
+def build_weather_model(df):
+    """Train GradientBoostingRegressor on pre-2024 data, test on 2024+.
+    Returns (model, mape_pct, test_df)."""
+    daily = _daily_totals(df)
+    daily, feature_cols = _make_features(daily)
+    daily["trip_date"] = pd.to_datetime(daily["trip_date"])
+    train = daily[daily["trip_date"] < "2024-01-01"]
+    test = daily[daily["trip_date"] >= "2024-01-01"]
+    X_train = train[feature_cols].values
+    y_train = train["num_trips"].values
+    X_test = test[feature_cols].values
+    y_test = test["num_trips"].values
+    model = GradientBoostingRegressor(n_estimators=200, max_depth=4, learning_rate=0.05, random_state=42)
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+    mape_pct = mean_absolute_percentage_error(y_test, y_pred) * 100
+    test_df = test.copy()
+    test_df["predicted_trips"] = y_pred
+    return model, mape_pct, test_df
+
+
+def compute_residuals(df, model):
+    """Returns daily df with predicted_trips and residual_pct columns."""
+    daily = _daily_totals(df)
+    daily, feature_cols = _make_features(daily)
+    daily["trip_date"] = pd.to_datetime(daily["trip_date"])
+    X = daily[feature_cols].values
+    daily["predicted_trips"] = model.predict(X)
+    daily["residual_pct"] = (daily["num_trips"] - daily["predicted_trips"]) / daily["predicted_trips"] * 100
+    return daily
+
+
+def fetch_forecast():
+    """Call Open-Meteo API for 7-day NYC forecast. Returns DataFrame or None."""
+    url = (
+        "https://api.open-meteo.com/v1/forecast"
+        "?latitude=40.7128&longitude=-74.0060"
+        "&daily=temperature_2m_max,temperature_2m_min,temperature_2m_mean,"
+        "precipitation_sum,snowfall_sum"
+        "&temperature_unit=fahrenheit"
+        "&precipitation_unit=inch"
+        "&timezone=America%2FNew_York"
+        "&forecast_days=7"
+    )
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()["daily"]
+        fc = pd.DataFrame({
+            "trip_date": pd.to_datetime(data["time"]),
+            "tavg_f": data["temperature_2m_mean"],
+            "prcp_in": data["precipitation_sum"],
+            "snow_in": data["snowfall_sum"],
+        })
+        return fc
+    except Exception:
+        return None
+
+
+def predict_forecast(model, forecast_df):
+    """Apply model to forecast_df. Returns forecast_df with predicted_trips column."""
+    d = forecast_df.copy()
+    d["trip_date"] = pd.to_datetime(d["trip_date"])
+    d["dow"] = d["trip_date"].dt.dayofweek
+    d["month"] = d["trip_date"].dt.month
+    d["year"] = d["trip_date"].dt.year
+    d["dow_sin"] = np.sin(2 * math.pi * d["dow"] / 7)
+    d["dow_cos"] = np.cos(2 * math.pi * d["dow"] / 7)
+    d["month_sin"] = np.sin(2 * math.pi * d["month"] / 12)
+    d["month_cos"] = np.cos(2 * math.pi * d["month"] / 12)
+    feature_cols = ["tavg_f", "prcp_in", "snow_in", "dow_sin", "dow_cos", "month_sin", "month_cos", "year"]
+    d = d.dropna(subset=feature_cols)
+    d["predicted_trips"] = model.predict(d[feature_cols].values)
+    return d
+
+
+def ebike_revenue(df):
+    """Compute estimated e-bike revenue. Returns long-form df with trip_date, member_casual, est_revenue."""
+    scope = df[
+        (pd.to_datetime(df["trip_date"]) >= pd.Timestamp("2021-02-01"))
+        & (df["num_electric_trips"] > 0)
+    ].copy()
+    scope["trip_date"] = pd.to_datetime(scope["trip_date"])
+    casual_mask = scope["member_casual"] == "casual"
+    scope["est_revenue"] = 0.0
+    scope.loc[casual_mask, "est_revenue"] = (
+        EBIKE_UNLOCK_CASUAL * scope.loc[casual_mask, "num_electric_trips"]
+        + EBIKE_RATE_CASUAL_PER_MIN * scope.loc[casual_mask, "avg_trip_duration_minutes"] * scope.loc[casual_mask, "num_electric_trips"]
+    )
+    scope.loc[~casual_mask, "est_revenue"] = (
+        EBIKE_RATE_MEMBER_PER_MIN * scope.loc[~casual_mask, "avg_trip_duration_minutes"] * scope.loc[~casual_mask, "num_electric_trips"]
+    )
+    return scope[["trip_date", "member_casual", "est_revenue", "num_electric_trips", "avg_trip_duration_minutes"]]
