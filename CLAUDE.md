@@ -165,3 +165,43 @@ This is the "cheat" option the task describes, and it's available — but per th
 - Row count equals the number of (date × region × rider-type) combinations present in the view — no dropped or duplicated groups from the materialization step.
 - Re-aggregating the materialized table back up (sum across all rows) reproduces deliverable 1's total row count exactly — materialization must not lose or double-count rows relative to its source view.
 - The materialized table is what the Streamlit dashboard actually queries (not the raw view) — confirmed by checking the dashboard's query source, since the whole point of this stair-step is to keep the dashboard off the 300M-row table.
+
+## Dashboard — Current State (Part 2)
+
+**Live URL:** https://citibike-dashboard-894638510471.us-central1.run.app
+
+**Source:** `dashboard/app.py` + `dashboard/transforms.py`
+
+### Tab layout
+
+| Tab | What it shows |
+|-----|---------------|
+| 📊 Overview | KPI cards (total trips, % member, avg daily), daily ridership trend, YoY growth %, weekday vs. weekend split |
+| 🌡️ Weather Impact | Temperature scatter (trips vs °F), casual share by temp band, rain/snow ridership bars |
+| 🔬 Model (Stretch 1) | GradientBoosting model, actual-vs-expected line chart, anomaly table |
+| 🔮 Forecast (Stretch 2) | 7-day predicted ridership using Open-Meteo forecast API (free, no key) |
+| 💰 E-Bike Revenue (Stretch 3) | Daily revenue estimate, Citibike 2025 pricing, Feb 2021+ scope |
+
+### Data flow
+
+```
+BigQuery: citibike.daily_summary_with_weather (~14k rows)
+  → load_data() cached @st.cache_data(ttl=3600)
+  → all charts: pandas only, no per-click BigQuery
+```
+
+### Deploying
+
+From Google Cloud Shell with GCP credentials active:
+
+```bash
+cd ~ && git clone https://github.com/caischen7/msbai-dwd-csc9720.git repo
+cp repo/dashboard/* ~/app/
+cd ~/app
+gcloud run deploy citibike-dashboard \
+  --source . \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --service-account claude-agent@msbai-dwd-csc9720.iam.gserviceaccount.com \
+  --set-env-vars GOOGLE_CLOUD_PROJECT=msbai-dwd-csc9720
+```

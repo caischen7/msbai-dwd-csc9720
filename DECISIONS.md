@@ -119,6 +119,8 @@ Spot-check vs. `nyu-datasets.citibike.m_daily_trips`:
 
 **Visitor:** a curious non-technical person — journalist, city planner, or Citibike manager — not a data analyst.
 
+**Structure:** five tabs — `📊 Overview`, `🌡️ Weather Impact`, `🔬 Model (Stretch 1)`, `🔮 Forecast (Stretch 2)`, `💰 E-Bike Revenue (Stretch 3)` — all filterable by date range, region (NYC/JC), and rider type (member/casual). Sidebar lists stretch features explicitly so they are not overlooked.
+
 ---
 
 ### The five questions and why

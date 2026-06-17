@@ -33,11 +33,17 @@ DECISIONS.md               Combined decisions memo for both parts (Translate wor
 
 ## The dashboard
 
-Twelve charts organized in four tabs (Ridership & Growth, Weather Impact,
-Model & Forecast, E-Bike Revenue), all filterable by date range, region
-(NYC/JC), and rider type (member/casual). Data source:
-`citibike.daily_summary_with_weather` (trips) joined to
-`nyu-datasets.weather.m_weather_daily_nyc` (Central Park).
+Five tabs, all filterable by date range, region (NYC/JC), and rider type
+(member/casual). Data source: `citibike.daily_summary_with_weather`
+(~14k rows) cached once per hour — no per-click BigQuery queries.
+
+| Tab | Contents |
+|-----|----------|
+| 📊 Overview | KPI cards, daily ridership trend, YoY growth %, weekday vs. weekend split |
+| 🌡️ Weather Impact | Temperature scatter, casual-share by temp band, rain/snow suppression |
+| 🔬 Model (Stretch 1) | GradientBoosting weather model, actual-vs-expected, anomaly table |
+| 🔮 Forecast (Stretch 2) | 7-day predicted ridership from Open-Meteo API (no key needed) |
+| 💰 E-Bike Revenue (Stretch 3) | Daily revenue estimate using 2025 Citibike pricing (Feb 2021+) |
 
 ### Run the tests (no cloud access needed)
 
