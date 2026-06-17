@@ -53,7 +53,7 @@ NYC and JC are **separate systems** with separate station namespaces. Every row 
 We load everything back to June 2013. The data has two incompatible layouts:
 
 | Era | Date range | Columns |
-|-----|-----------|---------|
+|-----|-----------|----------|
 | Schema A | 2013 – Jan 2021 | 15 cols; title-case headers 2013–2017, lowercase 2018–Jan 2021; includes `birth_year`, `gender` |
 | Schema B | Feb 2021 onward | 13 cols; GBFS-style names; includes `rideable_type`; no `birth_year` or `gender` |
 
@@ -124,7 +124,7 @@ Spot-check vs. `nyu-datasets.citibike.m_daily_trips`:
 ### The five questions and why
 
 | # | Question | Business reason |
-|---|---------|-----------------|
+|---|----------|-----------------|
 | 1 | How has ridership grown, and how much does it swing with seasons? | Context before any weather story. The seasonal swing dwarfs year-over-year growth within any calendar year. |
 | 2 | Does temperature predict ridership, and is it different for casual vs. member riders? | Temperature is the strongest single weather driver. The rider-type split shows who is weather-sensitive (casual) vs. habitual (member). |
 | 3 | How does the casual rider share shift with temperature? | Casual riders have higher per-trip margin than members. They self-concentrate on warm days — exactly when weather-triggered promotions are most effective. |
@@ -168,7 +168,7 @@ These are the three dimensions a non-technical visitor can reason about that act
 
 ---
 
-### Diagnose — why deployment fails differ from local failures
+### Diagnose — why deployment failures differ from local failures
 
 Every failure we hit was about **environment and identity, not code**:
 

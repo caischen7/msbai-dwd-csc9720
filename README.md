@@ -28,13 +28,14 @@ docs/
   PIPELINE.md              Part 1 design decisions + validation
   DASHBOARD_SPEC.md        Part 2 spec: questions, filters, slices, verify targets
   DASHBOARD_DECISIONS.md   Part 2 memo: defends the spec + reports verification
+DECISIONS.md               Combined decisions memo for both parts (Translate work)
 ```
 
 ## The dashboard
 
-Twelve charts, all filterable by date range, region (NYC/JC), and rider type
-(member/casual). The questions they answer and the per-chart claims are in
-[`docs/DASHBOARD_SPEC.md`](docs/DASHBOARD_SPEC.md). Data source:
+Twelve charts organized in four tabs (Ridership & Growth, Weather Impact,
+Model & Forecast, E-Bike Revenue), all filterable by date range, region
+(NYC/JC), and rider type (member/casual). Data source:
 `citibike.daily_summary_with_weather` (trips) joined to
 `nyu-datasets.weather.m_weather_daily_nyc` (Central Park).
 
@@ -64,9 +65,6 @@ python3 etl/build_weather_summary.py             # build daily_summary_with_weat
 ```bash
 cd dashboard && ./deploy.sh                       # builds via Cloud Build, deploys to Cloud Run
 ```
-
-Deployment notes (and why the live world differs from local) are in
-[`docs/DASHBOARD_DECISIONS.md`](docs/DASHBOARD_DECISIONS.md).
 
 ## Teaching team access
 
