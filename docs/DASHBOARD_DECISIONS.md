@@ -149,3 +149,40 @@ All three stretch items are now implemented (Charts 6, 7, 8).
    `citibike.daily_summary_with_weather`.
 4. `cd dashboard && ./deploy.sh` → get the public URL.
 5. Put the URL in `README.md`; run the Speed/Reach/Clarity checks above.
+
+## Stretch items — implemented
+
+All three stretch items are now implemented. Assumptions and limits are stated here per the assignment's honesty bar.
+
+### Stretch 1: Weather-adjusted ridership model
+
+**What it does:** Fits a `GradientBoostingRegressor` (200 trees, depth 4, lr=0.05) on daily total trips using 8 features: `tavg_f`, `prcp_in`, `snow_in`, day-of-week (sin/cos encoded), month (sin/cos encoded), and year (captures fleet growth trend). Shows actual vs model-expected daily trips and flags days where `|residual| > 2σ` as anomalies worth a manager's attention.
+
+**Train/test split:** Train on pre-2024 data (~3,800 days); test on 2024+ (~500 days, never seen during training). This is a true out-of-sample holdout — not cross-validation on the same period.
+
+**Out-of-sample MAPE:** Computed at runtime and displayed in the chart caption. Expected range: 15-25% (the model captures seasonal/weather patterns but cannot predict disruptions, events, or fleet changes).
+
+**Limits:** The model aggregates all systems and rider types into one daily total — it cannot be filtered by region or rider type without retraining. The `year` feature captures average growth but not sudden step-changes (e.g., the 2020 COVID collapse or a major system expansion). Days flagged as anomalies require human judgment to diagnose — the model flags the gap, not the cause.
+
+### Stretch 2: 7-day ridership forecast
+
+**What it does:** Calls Open-Meteo's free forecast API (no API key) for the next 7 days at NYC coordinates (40.7128°N, 74.0060°W), maps the forecast to the same features as the training data, and applies the Stretch 1 model to predict total daily trips.
+
+**Feature mapping from forecast:** `temperature_2m_mean` → `tavg_f`; `precipitation_sum` → `prcp_in`; `snowfall_sum` → `snow_in`; day-of-week and month derived from forecast date; year from forecast date.
+
+**Honest accuracy statement:** The caption displays the actual out-of-sample MAPE from Stretch 1 (computed on 2024+ data). "Within X% on held-out data" is the number shown — not a claim about future accuracy, which may differ as conditions deviate further from the training distribution.
+
+**Limits:** The model was trained on historical weather, not forecasts — forecast error compounds model error. Short-term (1-2 day) forecasts from Open-Meteo are typically accurate to ±2-4°F and ±0.1" precip, which translates to additional model uncertainty beyond the stated MAPE.
+
+### Stretch 3: E-bike revenue estimate
+
+**Pricing schedule used (Citibike 2025, retrieved June 2026):**
+- Casual e-bike: $1.00 unlock fee + $0.26/min
+- Member e-bike: $0.17/min (no unlock fee; membership covers access)
+- Classic bike trips excluded — a member's classic trip is covered by their subscription with near-zero marginal revenue; a casual classic ride is a flat fee with no per-minute component at the daily-summary grain.
+
+**Scope:** Feb 2021 onward, `num_electric_trips > 0` rows only. Bike type (`rideable_type`) was not recorded before Feb 2021 (Schema A), so pre-2021 rows correctly contribute zero electric revenue.
+
+**Duration approximation:** `avg_trip_duration_minutes` in `daily_summary_with_weather` is the average across ALL trip types in that (date, system, rider_type) group — not specifically electric trips. E-bike trips may have different average durations than classic trips. This is an approximation; the daily-summary grain does not separate durations by bike type. Treat estimates as ±20-30% order-of-magnitude, not audited revenue.
+
+**Framing:** The dashboard labels all figures "estimated e-bike revenue" and the caption states "Citibike 2025 pricing as a yardstick." This is not reconstructed historical revenue — prices changed across 2013-2026 and the exact historical schedule is not available. The yardstick is consistent (same rate applied throughout) and directionally correct for comparing weather conditions against each other.
